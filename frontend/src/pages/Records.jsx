@@ -1,9 +1,11 @@
 import { useState, useEffect } from 'react';
 import axios from 'axios';
+import { useAuth } from '../context/AuthContext';
 
 const API = 'http://localhost:5000/api';
 
 export default function Records() {
+  const { user } = useAuth();
   const [records, setRecords] = useState([]);
   const [vehicles, setVehicles] = useState([]);
   const [slots, setSlots] = useState([]);
@@ -14,22 +16,40 @@ export default function Records() {
   const [toast, setToast] = useState(null);
 
   const load = async () => {
-    const [r, v, s] = await Promise.all([
-      axios.get(`${API}/records`),
-      axios.get(`${API}/vehicles`),
-      axios.get(`${API}/slots`),
-    ]);
-    setRecords(r.data); setVehicles(v.data);
-    setSlots(s.data.filter(sl => sl.status === 'Available'));
+    try {
+      const recordEndpoint = user?.role === 'admin'
+        ? `${API}/records`
+        : `${API}/records/my/${user?.userID}`;
+
+      const vehicleEndpoint = user?.role === 'admin'
+        ? `${API}/vehicles`
+        : `${API}/vehicles/my/${user?.userID}`;
+
+      const [r, v, s] = await Promise.all([
+        axios.get(recordEndpoint),
+        axios.get(vehicleEndpoint),
+        axios.get(`${API}/slots`),
+      ]);
+      setRecords(r.data);
+      setVehicles(v.data);
+      setSlots(s.data.filter(sl => sl.status === 'Available'));
+    } catch (e) {
+      setToast({ msg: 'Failed to load records', type: 'error' });
+    }
   };
+
   useEffect(() => { load(); }, []);
+
+  useEffect(() => {
+    if (toast) { const t = setTimeout(() => setToast(null), 3000); return () => clearTimeout(t); }
+  }, [toast]);
 
   const recordEntry = async () => {
     try {
       await axios.post(`${API}/records/entry`, entryForm);
       setToast({ msg: 'Entry recorded!', type: 'success' });
       setShowEntry(false); load();
-    } catch (e) { setToast({ msg: 'Error', type: 'error' }); }
+    } catch (e) { setToast({ msg: 'Error recording entry', type: 'error' }); }
   };
 
   const recordExit = async () => {
@@ -49,13 +69,19 @@ export default function Records() {
 
   return (
     <div>
-      {toast && <div className={`toast ${toast.type}`}>{toast.msg}</div>}
+      {toast && <div className={`toast ${toast.type}`}>{toast.type === 'success' ? '✅' : '❌'} {toast.msg}</div>}
       <div className="page-header">
-        <div><div className="page-title">Parking <span>Records</span></div></div>
-        <div style={{display:'flex',gap:8}}>
-          <button className="btn btn-primary" onClick={() => setShowEntry(true)}>+ Vehicle Entry</button>
-          <button className="btn btn-outline" onClick={() => setShowExit(true)}>Vehicle Exit</button>
+        <div>
+          <div className="page-title">
+            {user?.role === 'admin' ? 'All' : 'My'} <span>Parking Records</span>
+          </div>
         </div>
+        {user?.role === 'admin' && (
+          <div style={{ display: 'flex', gap: 8 }}>
+            <button className="btn btn-primary" onClick={() => setShowEntry(true)}>+ Vehicle Entry</button>
+            <button className="btn btn-outline" onClick={() => setShowExit(true)}>Vehicle Exit</button>
+          </div>
+        )}
       </div>
       <div className="card">
         <div className="table-wrap">
@@ -64,7 +90,9 @@ export default function Records() {
               <tr><th>ID</th><th>Plate</th><th>Type</th><th>Slot</th><th>Entry</th><th>Exit</th><th>Duration</th><th>Fee</th></tr>
             </thead>
             <tbody>
-              {records.map(r => (
+              {records.length === 0 ? (
+                <tr><td colSpan={8} style={{ textAlign: 'center', color: '#888' }}>No records found</td></tr>
+              ) : records.map(r => (
                 <tr key={r.recordID}>
                   <td>{r.recordID}</td>
                   <td><strong>{r.plateNumber}</strong></td>
@@ -81,7 +109,7 @@ export default function Records() {
         </div>
       </div>
 
-      {showEntry && (
+      {showEntry && user?.role === 'admin' && (
         <div className="modal-overlay" onClick={() => setShowEntry(false)}>
           <div className="modal" onClick={e => e.stopPropagation()}>
             <div className="modal-header">
@@ -90,14 +118,14 @@ export default function Records() {
             </div>
             <div className="form-group">
               <label className="form-label">Vehicle</label>
-              <select className="form-select" value={entryForm.vehicleID} onChange={e => setEntryForm({...entryForm, vehicleID: e.target.value})}>
+              <select className="form-select" value={entryForm.vehicleID} onChange={e => setEntryForm({ ...entryForm, vehicleID: e.target.value })}>
                 <option value="">Select vehicle</option>
                 {vehicles.map(v => <option key={v.vehicleID} value={v.vehicleID}>{v.plateNumber} — {v.ownerName}</option>)}
               </select>
             </div>
             <div className="form-group">
               <label className="form-label">Available Slot</label>
-              <select className="form-select" value={entryForm.slotID} onChange={e => setEntryForm({...entryForm, slotID: e.target.value})}>
+              <select className="form-select" value={entryForm.slotID} onChange={e => setEntryForm({ ...entryForm, slotID: e.target.value })}>
                 <option value="">Select slot</option>
                 {slots.map(s => <option key={s.slotID} value={s.slotID}>{s.slotNumber} — Floor {s.floorNumber}</option>)}
               </select>
@@ -110,7 +138,7 @@ export default function Records() {
         </div>
       )}
 
-      {showExit && (
+      {showExit && user?.role === 'admin' && (
         <div className="modal-overlay" onClick={() => setShowExit(false)}>
           <div className="modal" onClick={e => e.stopPropagation()}>
             <div className="modal-header">
@@ -120,11 +148,11 @@ export default function Records() {
             <div className="form-group">
               <label className="form-label">Record ID</label>
               <input className="form-input" type="number" placeholder="Enter parking record ID"
-                value={exitForm.recordID} onChange={e => setExitForm({...exitForm, recordID: e.target.value})} />
+                value={exitForm.recordID} onChange={e => setExitForm({ ...exitForm, recordID: e.target.value })} />
             </div>
             <div className="form-group">
               <label className="form-label">Payment Method</label>
-              <select className="form-select" value={exitForm.paymentMethod} onChange={e => setExitForm({...exitForm, paymentMethod: e.target.value})}>
+              <select className="form-select" value={exitForm.paymentMethod} onChange={e => setExitForm({ ...exitForm, paymentMethod: e.target.value })}>
                 <option>Cash</option><option>Card</option><option>Online</option>
               </select>
             </div>

@@ -2,6 +2,7 @@ const express = require('express');
 const router = express.Router();
 const { sql, poolPromise } = require('../db');
 
+// GET all records (admin)
 router.get('/', async (req, res) => {
   const pool = await poolPromise;
   const r = await pool.request().query(
@@ -12,6 +13,24 @@ router.get('/', async (req, res) => {
      ORDER BY rc.entryTime DESC`
   );
   res.json(r.recordset);
+});
+
+// GET records for a specific user (user-scoped)
+router.get('/my/:userID', async (req, res) => {
+  try {
+    const pool = await poolPromise;
+    const r = await pool.request()
+      .input('userID', sql.Int, req.params.userID)
+      .query(
+        `SELECT rc.*, v.plateNumber, v.vehicleType, s.slotNumber
+         FROM parking_records rc
+         LEFT JOIN vehicles v ON rc.vehicleID = v.vehicleID
+         LEFT JOIN parking_slots s ON rc.slotID = s.slotID
+         WHERE v.userID = @userID
+         ORDER BY rc.entryTime DESC`
+      );
+    res.json(r.recordset);
+  } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
 router.post('/entry', async (req, res) => {
