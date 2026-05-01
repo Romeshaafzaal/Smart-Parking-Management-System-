@@ -39,8 +39,8 @@ router.get('/my/:userID', async (req, res) => {
 // Create reservation + auto-add vehicle if new + generate payment
 router.post('/', async (req, res) => {
   const { vehicleID, slotID, userID, startTime, endTime, paymentMethod,
-          // New vehicle fields (if user is adding a new vehicle inline)
-          newVehicle } = req.body;
+    // New vehicle fields (if user is adding a new vehicle inline)
+    newVehicle } = req.body;
 
   if (!slotID || !userID || !startTime || !endTime)
     return res.status(400).json({ error: 'slotID, userID, startTime, endTime required' });
@@ -65,11 +65,11 @@ router.post('/', async (req, res) => {
           return res.status(400).json({ error: 'This plate number is registered to another user' });
       } else {
         const vr = await pool.request()
-          .input('plate',  sql.NVarChar, newVehicle.plateNumber)
-          .input('type',   sql.NVarChar, newVehicle.vehicleType || 'Car')
-          .input('owner',  sql.NVarChar, newVehicle.ownerName || null)
-          .input('phone',  sql.NVarChar, newVehicle.phone || null)
-          .input('userID', sql.Int,      parseInt(userID))
+          .input('plate', sql.NVarChar, newVehicle.plateNumber)
+          .input('type', sql.NVarChar, newVehicle.vehicleType || 'Car')
+          .input('owner', sql.NVarChar, newVehicle.ownerName || null)
+          .input('phone', sql.NVarChar, newVehicle.phone || null)
+          .input('userID', sql.Int, parseInt(userID))
           .query(`INSERT INTO vehicles (plateNumber, vehicleType, ownerName, phone, userID)
                   OUTPUT INSERTED.vehicleID
                   VALUES (@plate, @type, @owner, @phone, @userID)`);
@@ -81,10 +81,19 @@ router.post('/', async (req, res) => {
       return res.status(400).json({ error: 'vehicleID or newVehicle details required' });
 
     const start = new Date(startTime);
-    const end   = new Date(endTime);
+    const end = new Date(endTime);
     if (end <= start) return res.status(400).json({ error: 'End time must be after start time' });
     const hours = Math.max(1, Math.ceil((end - start) / 3600000));
 
+    const overlap = await pool.request()
+      .input('slotID', sql.Int, slotID)
+      .input('startTime', sql.DateTime, start)
+      .input('endTime', sql.DateTime, end)
+      .query(`SELECT 1 FROM reservations 
+              WHERE slotID = @slotID AND status = 'Active'
+              AND @startTime < endTime AND @endTime > startTime`);
+    if (overlap.recordset.length)
+      return res.status(400).json({ error: 'Slot already reserved for that time period' });
     // Get vehicle type for rate lookup
     const veh = await pool.request()
       .input('vehicleID', sql.Int, resolvedVehicleID)
@@ -95,7 +104,7 @@ router.post('/', async (req, res) => {
       .input('type', sql.NVarChar, vehicleType)
       .query('SELECT TOP 1 pricePerHour FROM rates WHERE vehicleType=@type');
     const rate = rateRes.recordset.length ? rateRes.recordset[0].pricePerHour : 100;
-    const fee  = hours * rate;
+    const fee = hours * rate;
 
     // Mark slot as reserved
     await pool.request().input('slotID', sql.Int, slotID)
@@ -103,14 +112,19 @@ router.post('/', async (req, res) => {
 
     // Create reservation
     const r = await pool.request()
-      .input('vehicleID', sql.Int,      resolvedVehicleID)
-      .input('slotID',    sql.Int,      slotID)
-      .input('userID',    sql.Int,      parseInt(userID))
+      .input('vehicleID', sql.Int, resolvedVehicleID)
+      .input('slotID', sql.Int, slotID)
+      .input('userID', sql.Int, parseInt(userID))
       .input('startTime', sql.DateTime, start)
-      .input('endTime',   sql.DateTime, end)
-      .query(`INSERT INTO reservations (vehicleID, slotID, userID, startTime, endTime)
-              OUTPUT INSERTED.reservationID
-              VALUES (@vehicleID, @slotID, @userID, @startTime, @endTime)`);
+      .input('endTime', sql.DateTime, end)
+
+      .query(`
+  DECLARE @ids TABLE (reservationID INT);
+  INSERT INTO reservations (vehicleID, slotID, userID, startTime, endTime)
+  OUTPUT INSERTED.reservationID INTO @ids
+  VALUES (@vehicleID, @slotID, @userID, @startTime, @endTime);
+  SELECT reservationID FROM @ids;
+`);
 
     const reservationID = r.recordset[0].reservationID;
 
@@ -118,10 +132,10 @@ router.post('/', async (req, res) => {
     const status = (paymentMethod && paymentMethod !== '') ? 'Paid' : 'Pending';
     const method = paymentMethod || 'Pending';
     await pool.request()
-      .input('reservationID', sql.Int,      reservationID)
-      .input('amount',        sql.Decimal,  fee)
-      .input('method',        sql.NVarChar, method)
-      .input('status',        sql.NVarChar, status)
+      .input('reservationID', sql.Int, reservationID)
+      .input('amount', sql.Decimal, fee)
+      .input('method', sql.NVarChar, method)
+      .input('status', sql.NVarChar, status)
       .query(`INSERT INTO payments (reservationID, amount, paymentMethod, status)
               VALUES (@reservationID, @amount, @method, @status)`);
 
